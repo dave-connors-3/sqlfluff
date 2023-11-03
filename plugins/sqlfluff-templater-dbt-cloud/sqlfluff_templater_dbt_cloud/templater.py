@@ -9,6 +9,7 @@ such, all imports of the dbt libraries are contained within the
 DbtTemplater class and so are only imported when necessary.
 """
 
+import json
 import logging
 import os
 import os.path
@@ -60,20 +61,34 @@ def parse_output(stdout):
     ansi_escape = re.compile(r"\x1B[@-_][0-?]*[ -/]*[@-~]")
     stdout_clean = ansi_escape.sub("", stdout)
 
-    # Use regex to find the content of interest
-    # The pattern looks for the string "Compiled node '<NODE_NAME>' is:\n"
-    # followed by any characters (non-greedy), and stops at the first occurrence of "\x"
-    pattern = re.compile(r"Compiled node '([^']*)' is:\n(.*?)\\r", re.DOTALL)
+    pattern = re.compile(r"\{(.+?)\}", re.DOTALL)
 
     # Search using the pattern
     match = pattern.search(stdout_clean)
     if match:
-        # Node name is in the first group, captured content in the second
-        node_name = match.group(1)
-        content = match.group(2)
-        return node_name, content
+        return json.loads(match.group())
     else:
-        return None, None
+        return None
+
+
+def render_func(in_str):
+    """A render function which just returns the input."""
+    command = [
+        "dbt",
+        "--quiet",
+        "compile",
+        "--inline",
+        '"' + in_str.replace("\x00", "") + '"',
+        "--output",
+        "json",
+    ]
+    print(command)
+    compile_model_result = subprocess.run(
+        command,
+        stdout=subprocess.PIPE,
+    )
+    compilation_output = parse_output(compile_model_result.stdout)
+    return compilation_output["compiled"]
 
 
 class DbtCloudTemplater(JinjaTemplater):
@@ -121,9 +136,18 @@ class DbtCloudTemplater(JinjaTemplater):
         source_dbt_sql = file_path.read_text()
         raw_sql = source_dbt_sql
         compile_model_result = subprocess.run(
-            ["dbt", "compile", "--select", fname], stdout=subprocess.PIPE
+            [
+                "dbt",
+                "compile",
+                "--select",
+                fname,
+                "--output",
+                "json",
+            ],
+            stdout=subprocess.PIPE,
         )
-        node_name, compiled_sql = parse_output(compile_model_result.stdout)
+        compilation_output = parse_output(compile_model_result.stdout)
+        compiled_sql = compilation_output["compiled"]
 
         if not source_dbt_sql.rstrip().endswith("-%}"):
             n_trailing_newlines = len(source_dbt_sql) - len(source_dbt_sql.rstrip("\n"))
@@ -138,19 +162,6 @@ class DbtCloudTemplater(JinjaTemplater):
         templater_logger.debug("    Node raw SQL: %r", raw_sql)
         templater_logger.debug("    Node compiled SQL: %r", compiled_sql)
 
-        render_func: Optional[Callable[[str], str]] = None
-        if render_func is None:
-            # NOTE: In this case, we shouldn't re-add newlines, because they
-            # were never taken away.
-            n_trailing_newlines = 0
-
-            # Overwrite the render_func placeholder.
-            def render_func(in_str):
-                """A render function which just returns the input."""
-                return in_str
-
-        # At this point assert that we _have_ a render_func
-        assert render_func is not None
         # Stash the formatter if provided to use in cached methods.
         raw_sliced, sliced_file, templated_sql = self.slice_file(
             source_dbt_sql,
