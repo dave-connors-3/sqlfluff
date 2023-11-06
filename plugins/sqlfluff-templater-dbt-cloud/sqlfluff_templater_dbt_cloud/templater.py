@@ -13,29 +13,15 @@ import json
 import logging
 import os
 import os.path
-from collections import deque
-from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 from typing import (
     TYPE_CHECKING,
-    Any,
-    Callable,
-    Deque,
-    Dict,
-    Iterator,
-    List,
     Optional,
-    Tuple,
-    Union,
 )
 
-from jinja2 import Environment
 from jinja2_simple_tags import StandaloneTag
 
-from sqlfluff.core.cached_property import cached_property
-from sqlfluff.core.errors import SQLFluffSkipFile, SQLFluffUserError, SQLTemplaterError
 from sqlfluff.core.templaters.base import TemplatedFile, large_file_check
 from sqlfluff.core.templaters.jinja import JinjaTemplater
 
@@ -75,20 +61,20 @@ def render_func(in_str):
     """A render function which just returns the input."""
     command = [
         "dbt",
-        "--quiet",
         "compile",
         "--inline",
-        '"' + in_str.replace("\x00", "") + '"',
+        in_str.replace("\x00", "dbt-dbt-dbt"),
         "--output",
         "json",
     ]
-    print(command)
     compile_model_result = subprocess.run(
         command,
         stdout=subprocess.PIPE,
     )
     compilation_output = parse_output(compile_model_result.stdout)
-    return compilation_output["compiled"]
+    compiled_sql = compilation_output["compiled"].replace("dbt-dbt-dbt", "\x00")
+    templater_logger.debug("Render function output : %r", compiled_sql)
+    return compiled_sql
 
 
 class DbtCloudTemplater(JinjaTemplater):
@@ -133,21 +119,9 @@ class DbtCloudTemplater(JinjaTemplater):
             formatter: Optional object for output.
         """
         file_path = Path(fname).expanduser().resolve()
-        source_dbt_sql = file_path.read_text()
+        source_dbt_sql = in_str or file_path.read_text()
         raw_sql = source_dbt_sql
-        compile_model_result = subprocess.run(
-            [
-                "dbt",
-                "compile",
-                "--select",
-                fname,
-                "--output",
-                "json",
-            ],
-            stdout=subprocess.PIPE,
-        )
-        compilation_output = parse_output(compile_model_result.stdout)
-        compiled_sql = compilation_output["compiled"]
+        compiled_sql = render_func(source_dbt_sql)
 
         if not source_dbt_sql.rstrip().endswith("-%}"):
             n_trailing_newlines = len(source_dbt_sql) - len(source_dbt_sql.rstrip("\n"))
@@ -159,7 +133,7 @@ class DbtCloudTemplater(JinjaTemplater):
             n_trailing_newlines = 0
 
         templater_logger.debug("    Raw SQL before compile: %r", source_dbt_sql)
-        templater_logger.debug("    Node raw SQL: %r", raw_sql)
+        # templater_logger.debug("    Node raw SQL: %r", raw_sql)
         templater_logger.debug("    Node compiled SQL: %r", compiled_sql)
 
         # Stash the formatter if provided to use in cached methods.
