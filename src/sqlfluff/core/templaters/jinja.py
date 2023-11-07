@@ -43,6 +43,8 @@ class JinjaTemplater(PythonTemplater):
     """
 
     name = "jinja"
+    sequential_fail_limit = 3
+    adapters = {}
 
     class Libraries:
         """Mock namespace for user-defined Jinja library."""
@@ -666,6 +668,9 @@ class JinjaTemplater(PythonTemplater):
         # The JinjaTracer slicing algorithm is more robust, but it requires
         # us to create and render a second template (not raw_str).
 
+        import pdb
+
+        pdb.set_trace()
         templater_logger.info("Slicing File Template")
         templater_logger.debug("    Raw String: %r", raw_str[:80])
         analyzer = JinjaAnalyzer(raw_str, self._get_jinja_env())
